@@ -1,0 +1,228 @@
+-- Amer Menu: Inf Jump + Aimbot/Camera Lock (single Script)
+-- جای اسکریپت: StarterPlayer > StarterPlayerScripts  و  RunContext = Client
+-- (کامرا و JumpRequest فقط روی کلاینت وجود دارن، روی سرور کار نمیکنن)
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+-- ===== settings =====
+local JUMP_COOLDOWN = 0.1
+local AIM_PART      = "Head"   -- "Head" or "HumanoidRootPart"
+local AIM_FOV       = 200      -- px radius from screen center
+local AIM_SMOOTH    = 0.25     -- 0..1  (1 = instant snap)
+local MAX_DISTANCE  = 500      -- studs
+local TEAM_CHECK    = true
+local WALL_CHECK    = true
+local INCLUDE_NPCS  = true
+
+local ON_COLOR  = Color3.fromRGB(46, 160, 67)
+local OFF_COLOR = Color3.fromRGB(170, 50, 50)
+
+-- ===== state =====
+local state = { infJump = false, aimbot = false }
+local ready = false
+
+-- ===== gui root =====
+local gui = Instance.new("ScreenGui")
+gui.Name = "AmerGui"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = player:WaitForChild("PlayerGui")
+
+-- ===== intro splash =====
+local splash = Instance.new("Frame")
+splash.Size = UDim2.fromScale(1, 1)
+splash.BackgroundColor3 = Color3.new(0, 0, 0)
+splash.BackgroundTransparency = 0.25
+splash.ZIndex = 100
+splash.Parent = gui
+
+local title = Instance.new("TextLabel")
+title.AnchorPoint = Vector2.new(0.5, 0.5)
+title.Position = UDim2.fromScale(0.5, 0.5)
+title.Size = UDim2.fromScale(0.8, 0.3)
+title.BackgroundTransparency = 1
+title.Text = "Amer"
+title.Font = Enum.Font.GothamBlack
+title.TextScaled = true
+title.TextColor3 = Color3.new(1, 1, 1)
+title.ZIndex = 101
+title.Parent = splash
+
+-- ===== menu =====
+local menu = Instance.new("Frame")
+menu.Size = UDim2.fromOffset(150, 110)
+menu.Position = UDim2.new(0, 12, 0.5, -55)
+menu.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+menu.BackgroundTransparency = 0.15
+menu.Visible = false
+menu.Parent = gui
+Instance.new("UICorner", menu).CornerRadius = UDim.new(0, 10)
+
+local header = Instance.new("TextLabel")
+header.Size = UDim2.new(1, 0, 0, 26)
+header.BackgroundTransparency = 1
+header.Text = "Amer"
+header.Font = Enum.Font.GothamBold
+header.TextSize = 16
+header.TextColor3 = Color3.new(1, 1, 1)
+header.Parent = menu
+
+-- drag (touch + mouse) via header
+do
+	local dragging, dragStart, startPos
+	header.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging, dragStart, startPos = true, i.Position, menu.Position
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			local d = i.Position - dragStart
+			menu.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+end
+
+local fovCircle = Instance.new("Frame")
+fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+fovCircle.Position = UDim2.fromScale(0.5, 0.5)
+fovCircle.Size = UDim2.fromOffset(AIM_FOV * 2, AIM_FOV * 2)
+fovCircle.BackgroundTransparency = 1
+fovCircle.Visible = false
+fovCircle.Parent = gui
+Instance.new("UICorner", fovCircle).CornerRadius = UDim.new(1, 0)
+local stroke = Instance.new("UIStroke", fovCircle)
+stroke.Color = Color3.new(1, 1, 1)
+stroke.Transparency = 0.5
+stroke.Thickness = 1.5
+
+local function makeToggle(label, y, key, onChange)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, -16, 0, 34)
+	btn.Position = UDim2.new(0, 8, 0, y)
+	btn.BackgroundColor3 = OFF_COLOR
+	btn.TextColor3 = Color3.new(1, 1, 1)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 14
+	btn.Text = label .. ": OFF"
+	btn.Parent = menu
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+
+	btn.Activated:Connect(function()
+		state[key] = not state[key]
+		btn.Text = label .. ": " .. (state[key] and "ON" or "OFF")
+		btn.BackgroundColor3 = state[key] and ON_COLOR or OFF_COLOR
+		if onChange then onChange(state[key]) end
+	end)
+end
+
+makeToggle("Inf Jump", 30, "infJump")
+makeToggle("Aimbot", 70, "aimbot", function(on) fovCircle.Visible = on end)
+
+-- ===== inf jump =====
+local lastJump = 0
+UserInputService.JumpRequest:Connect(function()
+	if not ready or not state.infJump then return end
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and hum.Health > 0 and os.clock() - lastJump >= JUMP_COOLDOWN then
+		lastJump = os.clock()
+		hum:ChangeState(Enum.HumanoidStateType.Jumping)
+	end
+end)
+
+-- ===== aimbot / camera lock =====
+local targets = {} -- cached Humanoid models
+local function refreshTargets()
+	local list = {}
+	if INCLUDE_NPCS then
+		for _, d in ipairs(Workspace:GetDescendants()) do
+			if d:IsA("Humanoid") and d.Parent and d.Parent ~= player.Character then
+				table.insert(list, d)
+			end
+		end
+	else
+		for _, p in ipairs(Players:GetPlayers()) do
+			local h = p ~= player and p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+			if h then table.insert(list, h) end
+		end
+	end
+	targets = list
+end
+task.spawn(function()
+	while true do
+		if state.aimbot then refreshTargets() end
+		task.wait(1)
+	end
+end)
+
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local function getBestTarget()
+	local vp = camera.ViewportSize
+	local center = Vector2.new(vp.X / 2, vp.Y / 2)
+	local myChar = player.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+	if not myRoot then return nil end
+
+	rayParams.FilterDescendantsInstances = { myChar }
+	local best, bestDist = nil, AIM_FOV
+
+	for _, hum in ipairs(targets) do
+		local model = hum.Parent
+		local part = model and (model:FindFirstChild(AIM_PART) or model:FindFirstChild("HumanoidRootPart"))
+		if hum.Health > 0 and part then
+			local plr = Players:GetPlayerFromCharacter(model)
+			local sameTeam = TEAM_CHECK and plr and plr.Team ~= nil and plr.Team == player.Team
+			if not sameTeam and (part.Position - myRoot.Position).Magnitude <= MAX_DISTANCE then
+				local sp, onScreen = camera:WorldToViewportPoint(part.Position)
+				if onScreen then
+					local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+					if d < bestDist then
+						local visible = true
+						if WALL_CHECK then
+							local origin = camera.CFrame.Position
+							local hit = Workspace:Raycast(origin, part.Position - origin, rayParams)
+							visible = hit == nil or hit.Instance:IsDescendantOf(model)
+						end
+						if visible then best, bestDist = part, d end
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
+RunService.RenderStepped:Connect(function()
+	if not ready or not state.aimbot then return end
+	camera = Workspace.CurrentCamera
+	local part = getBestTarget()
+	if part then
+		local pos = camera.CFrame.Position
+		camera.CFrame = camera.CFrame:Lerp(CFrame.new(pos, part.Position), AIM_SMOOTH)
+	end
+end)
+
+-- ===== intro sequence =====
+task.delay(3, function()
+	TweenService:Create(splash, TweenInfo.new(0.5), { BackgroundTransparency = 1 }):Play()
+	TweenService:Create(title, TweenInfo.new(0.5), { TextTransparency = 1 }):Play()
+	task.wait(0.5)
+	splash:Destroy()
+	menu.Visible = true
+	ready = true
+end)
